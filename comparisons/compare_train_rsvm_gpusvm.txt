@@ -1,0 +1,561 @@
+#include <sys/times.h>					      <
+#include <time.h>					      <
+#include <stdio.h>						#include <stdio.h>
+#include <stdlib.h>						#include <stdlib.h>
+#include <string.h>						#include <string.h>
+#include <ctype.h>						#include <ctype.h>
+							      >	#include <errno.h>
+#include "svm.h"						#include "svm.h"
+#define Malloc(type,n) (type *)malloc((n)*sizeof(type))		#define Malloc(type,n) (type *)malloc((n)*sizeof(type))
+
+							      >	void print_null(const char *s) {}
+							      >
+void exit_with_help()						void exit_with_help()
+{								{
+	printf(								printf(
+	"Usage: svm-train [options] training_set_file [model_		"Usage: svm-train [options] training_set_file [model_
+	"options:\n"							"options:\n"
+	"-h number: #sv for big rsvm problem(w/ -v: for big s <
+	"-s svm_type : set type of SVM (default 0)\n"			"-s svm_type : set type of SVM (default 0)\n"
+	"	0 -- C-SVC\n"				      |		"	0 -- C-SVC		(multi-class classifi
+	"	1: rsvm with least square svm method\n"	      |		"	1 -- nu-SVC		(multi-class classifi
+	"	2: rsvm with lagruangian svm method\n"	      |		"	2 -- one-class SVM\n"
+	"	3: rsvm with modified least square svm method |		"	3 -- epsilon-SVR	(regression)\n"
+	"	4: rsvm with ssvm method (nu=subset ratio)\n" |		"	4 -- nu-SVR		(regression)\n"
+//	"	1 -- nu-SVC\n"				      <
+//	"	2 -- one-class SVM\n"			      <
+//	"	3 -- epsilon-SVR\n"			      <
+//	"	4 -- nu-SVR\n"				      <
+	"-t kernel_type : set type of kernel function (defaul		"-t kernel_type : set type of kernel function (defaul
+	"	0 -- linear: u'*v\n"					"	0 -- linear: u'*v\n"
+	"	1 -- polynomial: (gamma*u'*v + coef0)^degree\		"	1 -- polynomial: (gamma*u'*v + coef0)^degree\
+	"	2 -- radial basis function: exp(-gamma*|u-v|^		"	2 -- radial basis function: exp(-gamma*|u-v|^
+	"	3 -- sigmoid: tanh(gamma*u'*v + coef0)\n"		"	3 -- sigmoid: tanh(gamma*u'*v + coef0)\n"
+							      >		"	4 -- precomputed kernel (kernel values in tra
+	"-d degree : set degree in kernel function (default 3		"-d degree : set degree in kernel function (default 3
+	"-g gamma : set gamma in kernel function (default 1/k |		"-g gamma : set gamma in kernel function (default 1/n
+	"-r coef0 : set coef0 in kernel function (default 0)\		"-r coef0 : set coef0 in kernel function (default 0)\
+	"-c cost : set the parameter C of C-SVC, epsilon-SVR,		"-c cost : set the parameter C of C-SVC, epsilon-SVR,
+	"-n nu : set the parameter nu of nu-SVC, one-class SV |		"-n nu : set the parameter nu of nu-SVC, one-class SV
+	"-p epsilon : set the epsilon in loss function of eps		"-p epsilon : set the epsilon in loss function of eps
+	"-m cachesize : set cache memory size in MB (default  |		"-m cachesize : set cache memory size in MB (default 
+	"-e epsilon : set tolerance of termination criterion 		"-e epsilon : set tolerance of termination criterion 
+//	"-h shrinking: whether to use the shrinking heuristic |		"-h shrinking : whether to use the shrinking heuristi
+	"-wi weight: set the parameter C of class i to weight |		"-b probability_estimates : whether to train a SVC or
+							      >		"-wi weight : set the parameter C of class i to weigh
+	"-v n: n-fold cross validation mode\n"				"-v n: n-fold cross validation mode\n"
+							      >		"-q : quiet mode (no outputs)\n"
+	);								);
+	exit(1);							exit(1);
+}								}
+
+							      >	void exit_input_error(int line_num)
+							      >	{
+							      >		fprintf(stderr,"Wrong input format at line %d\n", lin
+							      >		exit(1);
+							      >	}
+							      >
+void parse_command_line(int argc, char **argv, char *input_fi	void parse_command_line(int argc, char **argv, char *input_fi
+void read_problem(const char *filename);			void read_problem(const char *filename);
+void do_cross_validation();					void do_cross_validation();
+
+struct svm_parameter param;		// set by parse_comma	struct svm_parameter param;		// set by parse_comma
+struct svm_problem prob;		// set by read_proble	struct svm_problem prob;		// set by read_proble
+struct svm_model *model;					struct svm_model *model;
+struct svm_node *x_space;					struct svm_node *x_space;
+int cross_validation = 0;				      |	int cross_validation;
+int nr_fold;							int nr_fold;
+
+							      >	static char *line = NULL;
+							      >	static int max_line_len;
+							      >
+							      >	#include "kernel_matrix_calculation.c"
+							      >	#include "cross_validation_with_matrix_precomputation.c"
+							      >
+							      >	static char* readline(FILE *input)
+							      >	{
+							      >		int len;
+							      >		
+							      >		if(fgets(line,max_line_len,input) == NULL)
+							      >			return NULL;
+							      >
+							      >		while(strrchr(line,'\n') == NULL)
+							      >		{
+							      >			max_line_len *= 2;
+							      >			line = (char *) realloc(line,max_line_len);
+							      >			len = (int) strlen(line);
+							      >			if(fgets(line+len,max_line_len-len,input) == 
+							      >				break;
+							      >		}
+							      >		return line;
+							      >	}
+							      >
+int main(int argc, char **argv)					int main(int argc, char **argv)
+{								{
+							      >		int i;
+	char input_file_name[1024];					char input_file_name[1024];
+	char model_file_name[1024];					char model_file_name[1024];
+							      >		const char *error_msg;
+
+	parse_command_line(argc, argv, input_file_name, model		parse_command_line(argc, argv, input_file_name, model
+	read_problem(input_file_name);					read_problem(input_file_name);
+							      >		error_msg = svm_check_parameter(&prob,&param);
+							      >		if(error_msg)
+							      >		{
+							      >			fprintf(stderr,"ERROR: %s\n",error_msg);
+							      >			exit(1);
+							      >		}
+
+	if(cross_validation)						if(cross_validation)
+	{								{
+		do_cross_validation();			      |			do_cross_validation_with_KM_precalculated(  )
+							      >
+							      >	//	do_cross_validation();
+	}								}
+	else								else
+	{								{
+		model = svm_train(&prob,&param);				model = svm_train(&prob,&param);
+		svm_save_model(model_file_name,model);	      |			if(svm_save_model(model_file_name,model))
+		svm_destroy_model(model);		      |			{
+							      >				fprintf(stderr, "can't save model to 
+							      >				exit(1);
+							      >			}
+							      >			svm_free_and_destroy_model(&model);
+	}								}
+							      |		svm_destroy_param(&param);
+{							      <
+        struct tms buffer;				      <
+        times(&buffer);					      <
+	double CLK_TCK = 1000.0;			      <
+        printf("user time = %f sec\n",(double) ((int) buffer. <
+}							      <
+							      <
+	free(prob.y);							free(prob.y);
+	free(prob.x);					      |
+							      >	#ifdef _DENSE_REP
+							      >		for (i = 0; i < prob.l; ++i)
+							      >			free((prob.x+i)->values);
+							      >	#else
+	free(x_space);							free(x_space);
+							      >	#endif
+							      >		free(prob.x);
+							      >		free(line);
+
+	return 0;							return 0;
+}								}
+
+void do_cross_validation()					void do_cross_validation()
+{								{
+	int i;								int i;
+	int total_correct = 0;						int total_correct = 0;
+	double total_error = 0;						double total_error = 0;
+	double sumv = 0, sumy = 0, sumvv = 0, sumyy = 0, sumv		double sumv = 0, sumy = 0, sumvv = 0, sumyy = 0, sumv
+							      >		double *target = Malloc(double,prob.l);
+
+       	srand(param.shrinking);				      |		svm_cross_validation(&prob,&param,nr_fold,target);
+	// random shuffle				      |		if(param.svm_type == EPSILON_SVR ||
+	for(i=0;i<prob.l;i++)				      |		   param.svm_type == NU_SVR)
+	{								{
+		int j = rand()%(prob.l-i);		      |			for(i=0;i<prob.l;i++)
+		struct svm_node *tx;			      <
+		double ty;				      <
+							      <
+		tx = prob.x[i];				      <
+		prob.x[i] = prob.x[j];			      <
+		prob.x[j] = tx;				      <
+							      <
+		ty = prob.y[i];				      <
+		prob.y[i] = prob.y[j];			      <
+		prob.y[j] = ty;				      <
+	}						      <
+							      <
+	for(i=0;i<nr_fold;i++)				      <
+	{						      <
+		int begin = i*prob.l/nr_fold;		      <
+		int end = (i+1)*prob.l/nr_fold;		      <
+		int j,k;				      <
+		struct svm_problem subprob;		      <
+							      <
+		subprob.l = prob.l-(end-begin);		      <
+		subprob.x = Malloc(struct svm_node*,subprob.l <
+		subprob.y = Malloc(double,subprob.l);	      <
+							      <
+		k=0;					      <
+		for(j=0;j<begin;j++)			      <
+		{					      <
+			subprob.x[k] = prob.x[j];	      <
+			subprob.y[k] = prob.y[j];	      <
+			++k;				      <
+		}					      <
+		for(j=end;j<prob.l;j++)			      <
+		{								{
+			subprob.x[k] = prob.x[j];	      |				double y = prob.y[i];
+			subprob.y[k] = prob.y[j];	      |				double v = target[i];
+			++k;				      |				total_error += (v-y)*(v-y);
+							      >				sumv += v;
+							      >				sumy += y;
+							      >				sumvv += v*v;
+							      >				sumyy += y*y;
+							      >				sumvy += v*y;
+		}								}
+							      <
+		if(param.svm_type == EPSILON_SVR ||	      <
+		   param.svm_type == NU_SVR)		      <
+		{					      <
+			struct svm_model *submodel = svm_trai <
+			double error = 0;		      <
+			for(j=begin;j<end;j++)		      <
+			{				      <
+				double v = svm_predict(submod <
+				double y = prob.y[j];	      <
+				error += (v-y)*(v-y);	      <
+				sumv += v;		      <
+				sumy += y;		      <
+				sumvv += v*v;		      <
+				sumyy += y*y;		      <
+				sumvy += v*y;		      <
+			}				      <
+			svm_destroy_model(submodel);	      <
+			printf("Mean squared error = %g\n", e <
+			total_error += error;		      <
+		}					      <
+		else					      <
+		{					      <
+			struct svm_model *submodel = svm_trai <
+			int correct = 0;		      <
+			for(j=begin;j<end;j++)		      <
+			{				      <
+				double v = svm_predict(submod <
+				if(v == prob.y[j])	      <
+					++correct;	      <
+			}				      <
+			svm_destroy_model(submodel);	      <
+			printf("Accuracy = %g%% (%d/%d)\n", 1 <
+			total_correct += correct;	      <
+		}					      <
+							      <
+		free(subprob.x);			      <
+		free(subprob.y);			      <
+	}						      <
+	if(param.svm_type == EPSILON_SVR || param.svm_type == <
+	{						      <
+		printf("Cross Validation Mean squared error =			printf("Cross Validation Mean squared error =
+		printf("Cross Validation Squared correlation 			printf("Cross Validation Squared correlation 
+			((prob.l*sumvy-sumv*sumy)*(prob.l*sum				((prob.l*sumvy-sumv*sumy)*(prob.l*sum
+			((prob.l*sumvv-sumv*sumv)*(prob.l*sum				((prob.l*sumvv-sumv*sumv)*(prob.l*sum
+			);								);
+	}								}
+	else								else
+							      >		{
+							      >			for(i=0;i<prob.l;i++)
+							      >				if(target[i] == prob.y[i])
+							      >					++total_correct;
+		printf("Cross Validation Accuracy = %g%%\n",1			printf("Cross Validation Accuracy = %g%%\n",1
+							      >		}
+							      >		free(target);
+}								}
+
+void parse_command_line(int argc, char **argv, char *input_fi	void parse_command_line(int argc, char **argv, char *input_fi
+{								{
+	int i;								int i;
+							      >		void (*print_func)(const char*) = NULL;	// default pr
+
+	// default values						// default values
+	param.svm_type = C_SVC;						param.svm_type = C_SVC;
+	param.kernel_type = RBF;					param.kernel_type = RBF;
+	param.degree = 3;						param.degree = 3;
+	param.gamma = 0;	// 1/k			      |		param.gamma = 0;	// 1/num_features
+	param.coef0 = 0;						param.coef0 = 0;
+	param.nu = 0.1;					      |		param.nu = 0.5;
+	param.cache_size = 40;				      |		param.cache_size = 100;
+	param.C = 1;							param.C = 1;
+	param.eps = 1e-3;						param.eps = 1e-3;
+	//	param.p = 0.1;				      |		param.p = 0.1;
+	param.p = 5; //for SSVM beta			      |		param.shrinking = 1;
+	param.shrinking = 200; //for big rsvm subproblem size |		param.probability = 0;
+	param.nr_weight = 0;						param.nr_weight = 0;
+	param.weight_label = NULL;					param.weight_label = NULL;
+	param.weight = NULL;						param.weight = NULL;
+							      >		cross_validation = 0;
+
+	// parse options						// parse options
+	for(i=1;i<argc;i++)						for(i=1;i<argc;i++)
+	{								{
+		if(argv[i][0] != '-') break;					if(argv[i][0] != '-') break;
+		++i;					      |			if(++i>=argc)
+							      >				exit_with_help();
+		switch(argv[i-1][1])						switch(argv[i-1][1])
+		{								{
+			case 's':							case 's':
+				param.svm_type = atoi(argv[i]					param.svm_type = atoi(argv[i]
+				break;								break;
+			case 't':							case 't':
+				param.kernel_type = atoi(argv					param.kernel_type = atoi(argv
+				break;								break;
+			case 'd':							case 'd':
+				param.degree = atof(argv[i]); |					param.degree = atoi(argv[i]);
+				break;								break;
+			case 'g':							case 'g':
+				param.gamma = atof(argv[i]);					param.gamma = atof(argv[i]);
+				break;								break;
+			case 'r':							case 'r':
+				param.coef0 = atof(argv[i]);					param.coef0 = atof(argv[i]);
+				break;								break;
+			case 'n':							case 'n':
+				param.nu = atof(argv[i]);					param.nu = atof(argv[i]);
+				break;								break;
+			case 'm':							case 'm':
+				param.cache_size = atof(argv[					param.cache_size = atof(argv[
+				break;								break;
+			case 'c':							case 'c':
+				param.C = atof(argv[i]);					param.C = atof(argv[i]);
+				break;								break;
+			case 'e':							case 'e':
+				param.eps = atof(argv[i]);					param.eps = atof(argv[i]);
+				break;								break;
+			case 'p':							case 'p':
+				param.p = atof(argv[i]);					param.p = atof(argv[i]);
+				break;								break;
+			case 'h':							case 'h':
+				param.shrinking = atoi(argv[i					param.shrinking = atoi(argv[i
+				break;								break;
+							      >				case 'b':
+							      >					param.probability = atoi(argv
+							      >					break;
+							      >				case 'q':
+							      >					print_func = &print_null;
+							      >					i--;
+							      >					break;
+			case 'v':							case 'v':
+				cross_validation = 1;						cross_validation = 1;
+				nr_fold = atoi(argv[i]);					nr_fold = atoi(argv[i]);
+				if(nr_fold < 2)							if(nr_fold < 2)
+				{								{
+					fprintf(stderr,"n-fol						fprintf(stderr,"n-fol
+					exit_with_help();						exit_with_help();
+				}								}
+				break;								break;
+			case 'w':							case 'w':
+				++param.nr_weight;						++param.nr_weight;
+				param.weight_label = (int *)r					param.weight_label = (int *)r
+				param.weight = (double *)real					param.weight = (double *)real
+				param.weight_label[param.nr_w					param.weight_label[param.nr_w
+				param.weight[param.nr_weight-					param.weight[param.nr_weight-
+				break;								break;
+			default:							default:
+				fprintf(stderr,"unknown optio |					fprintf(stderr,"Unknown optio
+				exit_with_help();						exit_with_help();
+		}								}
+	}								}
+
+							      >		svm_set_print_string_function(print_func);
+							      >
+	// determine filenames						// determine filenames
+
+	if(i>=argc)							if(i>=argc)
+		exit_with_help();						exit_with_help();
+
+	strcpy(input_file_name, argv[i]);				strcpy(input_file_name, argv[i]);
+
+	if(i<argc-1)							if(i<argc-1)
+		strcpy(model_file_name,argv[i+1]);				strcpy(model_file_name,argv[i+1]);
+	else								else
+	{								{
+		char *p = strrchr(argv[i],'/');					char *p = strrchr(argv[i],'/');
+		if(p==NULL)							if(p==NULL)
+			p = argv[i];							p = argv[i];
+		else								else
+			++p;								++p;
+		sprintf(model_file_name,"%s.model",p);				sprintf(model_file_name,"%s.model",p);
+	}								}
+}								}
+
+// read in a problem (in svmlight format)			// read in a problem (in svmlight format)
+
+void read_problem(const char *filename)				void read_problem(const char *filename)
+{								{
+	int elements, max_index, i, j;			      |		int elements, max_index, inst_max_index, i, j;
+							      >	#ifdef _DENSE_REP
+							      >		double value;
+							      >	#endif
+	FILE *fp = fopen(filename,"r");					FILE *fp = fopen(filename,"r");
+							      |		char *endptr;
+							      >		char *idx, *val, *label;
+							      >
+	if(fp == NULL)							if(fp == NULL)
+	{								{
+		fprintf(stderr,"can't open input file %s\n",f			fprintf(stderr,"can't open input file %s\n",f
+		exit(1);							exit(1);
+	}								}
+
+	prob.l = 0;							prob.l = 0;
+	elements = 0;							elements = 0;
+	while(1)					      |
+							      >		max_line_len = 1024;
+							      >		line = Malloc(char,max_line_len);
+							      >	#ifdef _DENSE_REP
+							      >		max_index = 1;
+							      >		while(readline(fp) != NULL)
+	{								{
+		int c = fgetc(fp);			      |			char *p;		
+		switch(c)				      |			p = strrchr(line, ':');
+							      >			if(p != NULL)
+							      >			{			
+							      >				while(*p != ' ' && *p != '\t' && p > 
+							      >					p--;
+							      >				if(p > line)
+							      >				 	max_index = (int) strtol(p,&e
+							      >			}
+							      >			if(max_index > elements)
+							      >				elements = max_index;
+							      >			++prob.l;
+							      >		}
+							      >
+							      >		rewind(fp);
+							      >
+							      >		prob.y = Malloc(double,prob.l);
+							      >		prob.x = Malloc(struct svm_node,prob.l);
+							      >
+							      >		for(i=0;i<prob.l;i++)
+							      >		{
+							      >			int *d; 
+							      >			(prob.x+i)->values = Malloc(double,elements);
+							      >			(prob.x+i)->dim = 0;
+							      >
+							      >			inst_max_index = -1; // strtol gives 0 if wro
+							      >			readline(fp);
+							      >
+							      >			label = strtok(line," \t");
+							      >			prob.y[i] = strtod(label,&endptr);
+							      >			if(endptr == label)
+							      >				exit_input_error(i+1);
+							      >
+							      >			while(1)
+		{								{
+			case '\n':			      |				idx = strtok(NULL,":");
+				++prob.l;		      |				val = strtok(NULL," \t");
+				// fall through,	      |
+				// count the '-1' element     |				if(val == NULL)
+			case ':':			      <
+				++elements;		      <
+				break;								break;
+			case EOF:			      |
+				goto out;		      |				errno = 0;
+			default:			      |				j = (int) strtol(idx,&endptr,10);
+				;			      |				if(endptr == idx || errno != 0 || *en
+							      >					exit_input_error(i+1);
+							      >				else
+							      >					inst_max_index = j;
+							      >
+							      >				errno = 0;
+							      >				value = strtod(val,&endptr);
+							      >				if(endptr == val || errno != 0 || (*e
+							      >					exit_input_error(i+1);
+							      >
+							      >				d = &((prob.x+i)->dim);
+							      >				while (*d < j)
+							      >					(prob.x+i)->values[(*d)++] = 
+							      >				(prob.x+i)->values[(*d)++] = value;
+							      >			}	
+							      >		}
+							      >		max_index = elements-1;
+							      >
+							      >	#else
+							      >		while(readline(fp)!=NULL)
+							      >		{
+							      >			char *p = strtok(line," \t"); // label
+							      >
+							      >			// features
+							      >			while(1)
+							      >			{
+							      >				p = strtok(NULL," \t");
+							      >				if(p == NULL || *p == '\n') // check 
+							      >					break;
+							      >				++elements;
+		}								}
+							      >			++elements;
+							      >			++prob.l;
+	}								}
+out:							      <
+	rewind(fp);							rewind(fp);
+
+	prob.y = Malloc(double,prob.l);					prob.y = Malloc(double,prob.l);
+	prob.x = Malloc(struct svm_node *,prob.l);			prob.x = Malloc(struct svm_node *,prob.l);
+	x_space = Malloc(struct svm_node,elements);			x_space = Malloc(struct svm_node,elements);
+
+	max_index = 0;							max_index = 0;
+	j=0;								j=0;
+	for(i=0;i<prob.l;i++)						for(i=0;i<prob.l;i++)
+	{								{
+		double label;				      |			inst_max_index = -1; // strtol gives 0 if wro
+							      >			readline(fp);
+		prob.x[i] = &x_space[j];					prob.x[i] = &x_space[j];
+		fscanf(fp,"%lf",&label);		      |			label = strtok(line," \t\n");
+		prob.y[i] = label;			      |			if(label == NULL) // empty line
+							      >				exit_input_error(i+1);
+							      >				
+							      >			prob.y[i] = strtod(label,&endptr);
+							      >			if(endptr == label || *endptr != '\0')
+							      >				exit_input_error(i+1);
+							      >
+		while(1)							while(1)
+		{								{
+			int c;				      |				idx = strtok(NULL,":");
+			do {				      |				val = strtok(NULL," \t");
+				c = getc(fp);		      |
+				if(c=='\n') goto out2;	      |				if(val == NULL)
+			} while(isspace(c));		      |					break;
+			ungetc(c,fp);			      |
+			fscanf(fp,"%d:%lf",&(x_space[j].index |				errno = 0;
+							      >				x_space[j].index = (int) strtol(idx,&
+							      >				if(endptr == idx || errno != 0 || *en
+							      >					exit_input_error(i+1);
+							      >				else
+							      >					inst_max_index = x_space[j].i
+							      >
+							      >				errno = 0;
+							      >				x_space[j].value = strtod(val,&endptr
+							      >				if(endptr == val || errno != 0 || (*e
+							      >					exit_input_error(i+1);
+							      >
+			++j;								++j;
+		}					      |			}
+out2:							      |
+		if(j>=1 && x_space[j-1].index > max_index)    |			if(inst_max_index > max_index)
+			max_index = x_space[j-1].index;	      |				max_index = inst_max_index;
+		x_space[j++].index = -1;					x_space[j++].index = -1;
+	}								}
+							      >	#endif
+
+	if(param.gamma == 0)				      |		if(param.gamma == 0 && max_index > 0)
+		param.gamma = 1.0/max_index;					param.gamma = 1.0/max_index;
+
+							      >		if(param.kernel_type == PRECOMPUTED)
+							      >			for(i=0;i<prob.l;i++)
+							      >			{
+							      >	#ifdef _DENSE_REP
+							      >				if ((prob.x+i)->dim == 0 || (prob.x+i
+							      >				{
+							      >					fprintf(stderr,"Wrong input f
+							      >					exit(1);
+							      >				}
+							      >				if ((int)(prob.x+i)->values[0] < 0 ||
+							      >				{
+							      >					fprintf(stderr,"Wrong input f
+							      >					exit(1);
+							      >				}
+							      >	#else
+							      >				if (prob.x[i][0].index != 0)
+							      >				{
+							      >					fprintf(stderr,"Wrong input f
+							      >					exit(1);
+							      >				}
+							      >				if ((int)prob.x[i][0].value <= 0 || (
+							      >				{
+							      >					fprintf(stderr,"Wrong input f
+							      >					exit(1);
+							      >				}
+							      >	#endif
+							      >			}
+	fclose(fp);							fclose(fp);
+}								}

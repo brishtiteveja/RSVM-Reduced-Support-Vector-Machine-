@@ -1,0 +1,125 @@
+#ifndef _LIBSVM_H						#ifndef _LIBSVM_H
+#define _LIBSVM_H						#define _LIBSVM_H
+							      >	#define _DENSE_REP
+							      >	#define LIBSVM_VERSION 317
+
+#ifdef __cplusplus						#ifdef __cplusplus
+extern "C" {							extern "C" {
+#endif								#endif
+
+#define BIG_PROB_THRESHOLD 5000				      |	extern int libsvm_version;
+#define REDUCE_THRESHOLD 500				      <
+
+//#define BIG_PROB_THRESHOLD 20000			      |	#ifdef _DENSE_REP
+//#define REDUCE_THRESHOLD 1000				      |	struct svm_node
+							      >	{
+							      >		int dim;
+							      >		double *values;
+							      >	};
+
+struct BQP						      |	struct svm_problem
+{								{
+	double eps;					      |		int l;
+	int n,l;					      |		double *y;
+	double *Q, *x, *C, *p;				      |		struct svm_node *x;
+};								};
+
+							      >	#else
+struct svm_node							struct svm_node
+{								{
+	int index;							int index;
+	double value;							double value;
+};								};
+
+struct svm_problem						struct svm_problem
+{								{
+	int l;								int l;
+	double *y;							double *y;
+	struct svm_node **x;						struct svm_node **x;
+};								};
+							      >	#endif
+
+enum { C_SVC, RSVMEQ, RSVMLSVM, RSVMEQ2, RSVMSSVM, RSVMSSVM1, |	enum { C_SVC, NU_SVC, ONE_CLASS, EPSILON_SVR, NU_SVR };	/* sv
+enum { LINEAR, POLY, RBF, SIGMOID };	/* kernel_type */     |	enum { LINEAR, POLY, RBF, SIGMOID, PRECOMPUTED }; /* kernel_t
+
+struct svm_parameter						struct svm_parameter
+{								{
+	int svm_type;							int svm_type;
+	int kernel_type;						int kernel_type;
+	double degree;	// for poly			      |		int degree;	/* for poly */
+	double gamma;	// for poly/rbf/sigmoid		      |		double gamma;	/* for poly/rbf/sigmoid */
+	double coef0;	// for poly/sigmoid		      |		double coef0;	/* for poly/sigmoid */
+							      |
+	// these are for training only			      |		/* these are for training only */
+	double cache_size; // in MB			      |		double cache_size; /* in MB */
+	double eps;	// stopping criteria		      |		double eps;	/* stopping criteria */
+	double C;	// for C_SVC, EPSILON_SVR and NU_SVR  |		double C;	/* for C_SVC, EPSILON_SVR and NU_SVR 
+	int nr_weight;		// for C_SVC		      |		int nr_weight;		/* for C_SVC */
+	int *weight_label;	// for C_SVC		      |		int *weight_label;	/* for C_SVC */
+	double* weight;		// for C_SVC		      |		double* weight;		/* for C_SVC */
+	double nu;	// for NU_SVC, ONE_CLASS, and NU_SVR  |		double nu;	/* for NU_SVC, ONE_CLASS, and NU_SVR 
+	double p;	// for EPSILON_SVR		      |		double p;	/* for EPSILON_SVR */
+	int shrinking;	// use the shrinking heuristics	      |		int shrinking;	/* use the shrinking heuristics */
+							      >		int probability; /* do probability estimates */
+};								};
+
+struct svm_model *svm_train(const struct svm_problem *prob,   |	//
+			    const struct svm_parameter *param |	// svm_model
+							      >	// 
+							      >	struct svm_model
+							      >	{
+							      >		struct svm_parameter param;	/* parameter */
+							      >		int nr_class;		/* number of classes, = 2 in 
+							      >		int l;			/* total #SV */
+							      >	#ifdef _DENSE_REP
+							      >		struct svm_node *SV;		/* SVs (SV[l]) */
+							      >	#else
+							      >		struct svm_node **SV;		/* SVs (SV[l]) */
+							      >	#endif
+							      >		double **sv_coef;	/* coefficients for SVs in de
+							      >		double *rho;		/* constants in decision func
+							      >		double *probA;		/* pariwise probability infor
+							      >		double *probB;
+							      >		int *sv_indices;        /* sv_indices[0,...,nSV-1] ar
+							      >		
+							      >		/* for classification only */
+							      >
+							      >		int *label;		/* label of each class (label
+							      >		int *nSV;		/* number of SVs for each cla
+							      >					/* nSV[0] + nSV[1] + ... + nS
+							      >		/* XXX */
+							      >		int free_sv;		/* 1 if svm_model is created 
+							      >					/* 0 if svm_model is created 
+							      >	};
+
+int svm_save_model(const char *model_file_name, const struct  |	struct svm_model *svm_train(const struct svm_problem *prob, c
+							      >	void svm_cross_validation(const struct svm_problem *prob, con
+
+							      >	int svm_save_model(const char *model_file_name, const struct 
+struct svm_model *svm_load_model(const char *model_file_name)	struct svm_model *svm_load_model(const char *model_file_name)
+
+							      >	int svm_get_svm_type(const struct svm_model *model);
+							      >	int svm_get_nr_class(const struct svm_model *model);
+							      >	void svm_get_labels(const struct svm_model *model, int *label
+							      >	void svm_get_sv_indices(const struct svm_model *model, int *s
+							      >	int svm_get_nr_sv(const struct svm_model *model);
+							      >	double svm_get_svr_probability(const struct svm_model *model)
+							      >
+							      >	double svm_predict_values(const struct svm_model *model, cons
+double svm_predict(const struct svm_model *model, const struc	double svm_predict(const struct svm_model *model, const struc
+							      >	double svm_predict_probability(const struct svm_model *model,
+							      >
+							      >	void svm_free_model_content(struct svm_model *model_ptr);
+							      >	void svm_free_and_destroy_model(struct svm_model **model_ptr_
+							      >	void svm_destroy_param(struct svm_parameter *param);
+							      >
+							      >	const char *svm_check_parameter(const struct svm_problem *pro
+							      >	int svm_check_probability_model(const struct svm_model *model
+
+void svm_destroy_model(struct svm_model *model);	      |	void svm_set_print_string_function(void (*print_func)(const c
+
+#ifdef __cplusplus						#ifdef __cplusplus
+}								}
+#endif								#endif
+
+#endif /* _LIBSVM_H */						#endif /* _LIBSVM_H */
